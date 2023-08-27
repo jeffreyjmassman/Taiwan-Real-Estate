@@ -1,0 +1,375 @@
+---
+title: "STAT 425 Final Project"
+author: "Jeff Massman"
+date: "11/21/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{css}
+h1, h2, h4 {
+  text-align: center;
+  font-weight: bold;
+}
+```
+
+### Contributions
+
+Jeff Massman (NetID = massman4) - Entire project (I decided to work alone on this project since I already had three other group projects to do simultaneously).
+
+## 1. Introduction
+    
+The goal of this report is to build and analyze several different statistical models to predict the valuation of real estate property in Taiwan based on seven different predictor variables. The dataset on which this report is based originates from a publication titled "Building Real Estate Valuation Models with Comparative Approach Through Case-Based Reasoning" by authors I-Cheng Yeh and Tzu-Kuang Hsu. In their publication, they analyze contemporary methods of building real estate valuation models, while proposing their own new innovative approach which they call the "Quantitative Comparative Approach." The actual composition of the data will be explored in the next section.
+
+This report will be organized into three sections: the first is a data exploratory section. As mentioned earlier, this is where the components of the data will be broken down and explained, as well as a preliminary analysis including graphics, summary statistics, etc.
+
+The second section will consist of the methodology, where the actual models and procedures for selecting those models will be outlined.
+
+Finally, there will be a brief conclusion, where the results of the analysis and other findings will be summarized.
+
+## 2. Exploratory Data Analysis
+
+```{r}
+# read data from excel spreadsheet
+library(readxl)
+realestate = read_excel("/Users/jeffmassman/Downloads/Real_estate_valuation_data_set-1.xlsx")
+```
+
+The original dataset is composed of six predictors and one response, though a seventh predictor, labelled $\mathrm{X}_7$, will be appended to the data.
+
+### 2.1 Components
+
+The data components are the following:
+
+  * $\mathrm{X}_1$ -- the transaction date (for example, 2013.250=2013 March, 2013.500=2013 June, etc.)
+  * $\mathrm{X}_2$ -- the house age (unit: year)
+  * $\mathrm{X}_3$ -- the distance to the nearest MRT station (unit: meters)
+  * $\mathrm{X}_4$ -- the number of convenience stores in the living circle on foot (integer)
+  * $\mathrm{X}_5$ -- the geographic coordinate, latitude. (unit: degree)
+  * $\mathrm{X}_6$ -- the geographic coordinate, longitude. (unit: degree)
+  * $\mathrm{X}_7$ -- the transaction month
+  * $\mathrm{Y}$ -- response variable; house price of unit area (10000 New Taiwan Dollar/Ping, where Ping is a local unit, 1 Ping = 3.3 squared meters)
+  
+### 2.2 Summary Statistics
+
+```{r}
+# create the month variable
+
+months = c("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+
+names(realestate) = c("No","X1","X2","X3","X4","X5","X6", "Y")
+
+#loop through and use the date to get the month
+
+X7 = c()
+for (i in 1:length(realestate$X1)) {
+  n = realestate$X1[i]
+  n = round((n - floor(n)) * 12)
+  if (n == 0) {
+    n = 12
+  }
+  X7[i] = months[n]
+}
+ytemp = realestate$Y
+realestate$X7 = as.factor(X7)
+realestate = realestate[,names(realestate) != "Y"]
+realestate$X1 = as.factor(realestate$X1)
+realestate$Y = ytemp
+```
+
+```{r}
+summary(realestate[,-1])
+```
+
+A more descriptive display of $\mathrm{X}_1$ and $\mathrm{X}_7$, respectively:
+
+```{r}
+table(realestate$X1)
+table(realestate$X7)
+```
+
+There is, roughly, a uniform distribution of months and dates. All the properties are within $0.08^{\circ}$ longitude and $0.1^{\circ}$ latitude of each other.
+
+All variables are quantitative except for $\mathrm{X}_1$ and $\mathrm{X}_7$, which are categorical. $\mathrm{X}_4$ is discrete, since it can only take on nonnegative integral values. There are no missing observations in the data, so imputation is not necessary.
+
+### 2.3 Variable Pair Plots
+
+```{r}
+pairs(realestate[,-1])
+```
+
+Most of these plots are not very noteworthy. 
+However, there appears to be a peculiar relationship between $\mathrm{X}_3$ and $\mathrm{X}_6$, almost quadratic-like.
+
+```{r}
+plot(realestate$X6, realestate$X3, main = "", xlab = "X6", ylab = "X3", col = "red", pch = 19)
+```
+
+There is a similar albeit weaker association between $\mathrm{X}_3$ and $\mathrm{X}_5$:
+
+```{r}
+plot(realestate$X5, realestate$X3, main = "", xlab = "X5", ylab = "X3", col = "blue", pch = 19)
+```
+
+The existence of these relationships makes sense: $\mathrm{X}_3$ is the distance to the nearest MRT station. It makes sense that this distance would be affected by the latitude and longitude coordinates ($\mathrm{X}_5$ and $\mathrm{X}_6$, respectively) of the property.
+
+There is also a relationship between $\mathrm{X}_4$ and $\mathrm{X}_5$, $\mathrm{X}_6$ (i.e. between the number of department stores nearby and the latitude / longitude coordinates).
+
+## 3. Methodology
+
+We will first examine a naive full linear regression model, with all variables. Since we have a small number of predictors, we can use what is called the "Leaps and Bounds" method to select the best possible model. From there, we will perform a series of model diagnostics and adapt the model accordingly. Then, we will evaluate the predictive power of the model by calculating the testing data prediction error. Afterwards, we will consider a ridge regression model and a random forest model, and we will compare the results of these three.
+
+### 3.1 Linear Regression (OLS) Model
+
+In this section, we will analyze the obvious linear model. There is an inherent collinearity issue present in the data. This is an artifact resulting from our construction of $\mathrm{X}_7$ from $\mathrm{X}_1$, so we will remove $\mathrm{X}_1$ from the model for the time being and proceed with our analysis. 
+
+Here are the results:
+
+```{r}
+fit = lm(Y~., data = realestate[,3:9])
+
+library(leaps) # perform leaps and bounds
+n = nrow(realestate)
+psize = 2:17
+b = regsubsets(Y~., data = realestate[3:9],nvmax = 18)
+bs = summary(b)
+AIC = n*log(bs$rss/n) + 2*psize
+bs$which[which.min(AIC),]
+
+fit3 = lm(Y~X2 + X3 + X4 + X5 + X7, data = realestate)
+
+r2 = summary(fit3)$r.squared
+```
+
+According to these results, the best model is one in which only $\mathrm{X}_6$ is removed. This gives us a linear model with an okay $\mathrm{R}^2$ value of `r r2`. Intuitively, this is the proportion of variation in the data explained by the model.
+
+It should also be noted that only three months out of twelve were found to be significant. However, it is generally ill-advised to remove insignificant factor levels (in this case, months), so we retain the entirety of $\mathrm{X}_7$.
+
+We now proceeed with model diagnostics.
+
+Normality Test:
+
+```{r,warning=FALSE,message=FALSE}
+library(lmtest)
+qqnorm(fit3$residuals)
+qqline(fit3$residuals)
+```
+
+From these results, our normality assumption is mostly justified. There is some deviation from the theoretical quantiles towards the end, but this is not totally unusual.
+
+Now we will test for homoscedasticity:
+
+```{r}
+bptest(fit3)
+```
+
+According to these results, our homoscedasticity assumption actually fails, So we will have to transform the response variable to see if we can remedy this. We will try a $\mathrm{Log}(\mathrm{Y})$ transformation:
+
+```{r}
+fit4 = lm(log(Y) ~ X2 + X3 + X4 + X5 + X7, data = realestate)
+bptest(fit4)
+plot(fit4,1)
+```
+
+This just pushes us over the $0.05$ threshold and thus, though not decisively, we can technically say that we have homoscedasticity in this model. This is not a very statistically sound conclusion, so perhaps more convincingly, we turn to the residual-fitted plot: the red line is mostly straight; in practice, it will typically never be exactly straight due to the randomness of the data, but this is good enough. 
+
+Retesting for normality in this new model:
+
+```{r}
+qqnorm(fit4$residuals)
+qqline(fit4$residuals)
+#hist(fit4$residuals,xlab = "",ylab = "", main = "Histogram of Residuals")
+```
+
+The quantiles follow the QQ line closely, with some deviation towards the end. We can say that the data is approximately normally distributed.
+
+We will now handle highly influential and outlier points. We will use Cook's Distance to see if any highly influential points need to be removed from the model, with the standard cutoff of $\frac{4}{n}$, where $n$ is our sample size. We will also remove points with absolute studentized residuals greater than $3$.
+
+```{r}
+n = nrow(realestate)
+
+# all points that are not outliers / influential
+
+keep = abs(rstudent(fit4)) < 3 & abs(cooks.distance(fit4)) < 4/n
+
+# update the model, giving 0 weight to the bad points
+
+fit5 = update(fit4,weights = as.numeric(keep))
+rsquare = summary(fit5)$r.squared
+```
+
+We find that $`r n - sum(keep)`$ points in our data fit the above criteria and must be removed.
+
+After removing, we test our assumptions one more time:
+
+```{r}
+bptest(fit5)
+rsquare = summary(fit5)$r.squared
+plot(fit5,1)
+```
+
+```{r}
+qqnorm(fit5$residuals)
+qqline(fit5$residuals)
+#hist(fit5$residuals,xlab = "",ylab = "", main = "Histogram of Residuals")
+```
+
+We have a heavy-tailed but still Gaussian distribution, as indicated by the QQ plot.
+
+Note that the residual vs fitted plot looks worse than before, but this partially due to the huge scale reduction on the $y$-axis; the red line is not the be-all-end-all; it will never be perfect. For our purposes, the residuals do not contain any significant pattern, therefore we may proceed.
+
+Our final model is
+
+$$ \mathrm{Log}\mathrm{Y} \sim \mathrm{X}_2 + \mathrm{X}_3 + \mathrm{X}_4 + \mathrm{X}_5 + \mathrm{X}_7 $$
+
+with an $\mathrm{R}^2$ value of $`r rsquare`$, which is quite good and is a marked improvement from the previous $0.594$ value from before.
+
+### 3.2: Prediction
+
+We will now evaluate the testing prediction error of our model.
+
+The following is an Actual vs. Predicted plot for the response in the testing data set:
+
+```{r}
+
+#Train-test split labels
+
+set.seed(1) # reproducibility
+
+groups = c(rep(1,310),rep(0,104))
+groups = sample(groups,414,replace = FALSE)
+
+train = realestate[groups == 1 & keep,]
+test = realestate[groups == 0 & keep,]
+
+#train the model
+
+fit.train = lm(log(Y)~X2 + X3 + X4 + X5 + X7, data = train)
+
+#predict on the testing data set
+
+pred = predict(fit.train,newdata = test)
+
+# plot an Actual vs fitted graph
+
+plot(log(test$Y),pred,col = "darkred",xlab = "Actual Log(Y)", ylab = "Predicted Log(Y)",main = "Testing Data Prediction",pch = 19)
+abline(0,1,col="blue",lwd=2)
+
+testmse = mean((test$Y- exp(pred))^2)
+```
+
+This plot shows a reasonable scattering pattern, which is what we would expect.
+
+After randomly splitting the data into a training ($75\%$) and testing ($25\%$) set, the mean squared prediction error (calculated by exponentiating the prediction) of the model is $`r testmse`$. We will use this for comparison later.
+
+### 3.3 Penalized (Ridge) Regression Model
+
+We will now construct another regression model, this time using ridge regression to add a penalty. We will construct a grid of $\lambda$ values, perform GCV, and select the $\lambda$ that minimizes the GCV error. We will train this model using the same training data as in section $3.1$. The response will not be transformed, but we will still keep $\mathrm{X}_6$ out of the model.
+
+```{r}
+library(MASS)
+
+set.seed(1)
+
+train2 = realestate[groups == 1,]
+test2 = realestate[groups == 0,]
+
+#fit the ridge regression
+
+mod.ridge = lm.ridge(Y~X2 + X3 + X4 + X5 + X7, data = train2, lambda = seq(1,40,by = 0.05))
+
+#plot GCV curve
+
+plot(seq(1,40,by = 0.05),mod.ridge$GCV,type = "l",xlab = "Lambda",ylab = "GCV Error")
+
+# Select lambda which minimizes GCV
+
+lambda.min = seq(1,40,by = 0.05)[which.min(mod.ridge$GCV)]
+abline(v =lambda.min,lty = "dashed",col = "blue")
+
+# predict on the testing data
+
+pred2 = model.matrix( ~ X2 + X3 + X4 + X5 + X7, data = test2)%*%coef(mod.ridge)[which.min(mod.ridge$GCV),]
+testmse2 = mean((pred2 - test2$Y)^2)
+```
+
+This is a plot of $\lambda$ vs. the error. According to the plot, our best $\lambda$ value is $`r lambda.min`$.
+
+Actual vs. fitted plots for both the training and testing data:
+
+```{r}
+
+#Actual vs fitted plot; log Y
+
+plot(test2$Y,pred2,col = "darkred",xlab = "Actual Y", ylab = "Predicted Y",main = "Testing Data Prediction",pch = 19)
+abline(0,1,col="blue",lwd=2)
+```
+
+The scattering pattern observed here is more erratic than that from the OLS model; there are more extreme values towards the right end.
+
+After predicting on the same testing set in section $3.1$, the MSE is $`r testmse2`$. This is worse than before, indicating that the ridge model may not be as good a fit as the OLS for the data.
+
+```{r}
+mod.ridge.2 = lm.ridge(Y~X2 + X3 + X4 + X5 + X7, data = train, lambda = seq(1,40,by = 0.05))
+
+#plot GCV curve
+
+# Select lambda which minimizes GCV
+
+lambda.min.2 = seq(1,40,by = 0.05)[which.min(mod.ridge.2$GCV)]
+
+# predict on the testing data
+
+pred3 = model.matrix( ~ X2 + X3 + X4 + X5 + X7, data = test)%*%coef(mod.ridge.2)[which.min(mod.ridge.2$GCV),]
+testmse2.1 = mean((pred3 - test$Y)^2)
+```
+
+However, though perhaps not totally valid, if we refit the ridge with the same extreme points removed as in the OLS model, we obtain an MSE of $`r testmse2.1`$, which is significantly better, but still slightly worse than the OLS model.
+
+### 3.4. Random Forest Model
+
+We will now fit a random forest model. We will consider all the predictors (except $\mathrm{X}_1$ again due to collinearity), and no transformation of the response. Also, no data points will be removed.
+
+Here is the actual vs. fitted plot:
+
+```{r,message = FALSE,warning = FALSE}
+
+# Fit random forest
+
+library(randomForest)
+set.seed(1) # Reproducibility
+rf = randomForest(Y~ X2 + X3 + X4 + X5 + X6 + X7,data = train)
+pred.rf = predict(rf,newdata = test)
+
+plot(test$Y,pred.rf,col = "darkred",xlab = "Actual Y", ylab = "Predicted Y",main = "Testing Data Prediction",pch = 19)
+abline(0,1,col="blue",lwd=2)
+mse.rf = mean((pred.rf - test$Y)^2)
+```
+
+The plot exhibits a very good scattering pattern, much better than the prior two models.
+
+The MSE for the random forest model is $`r mse.rf`$. This is also a huge improvement on the previous two models.
+
+## 4. Conclusion
+
+Three regression models were fit in this report: a standard OLS model, a ridge regression model, and a random forest model. Some predictors were removed from the analysis as well as extreme data points, and the response was log-transformed for the OLS model. What we found:
+
+```{r,warning = FALSE, message = FALSE}
+
+# Create a table of the results
+
+library(knitr)
+kabletable = as.data.frame(cbind(c("OLS","Ridge","Random Forest"),sapply(c(testmse,testmse2.1,mse.rf),round,3)))
+names(kabletable) = c("Model","Prediction MSE")
+kable(kabletable)
+```
+
+  * The random forest model performed the best out of the three models with respect to the testing MSE
+  * Parameter tuning was necessary for the ridge model, optional for the random forest model, and not required for the OLS model
+  * Between OLS and ridge, OLS seemed to performs better. However, when removing the same outlier points as in the OLS model, we get a major performance boost in the ridge model
+  * In the OLS model, the log-transformed response may make interpretation more difficult
+
+Therefore, in building a model to predict real estate valuation in Taiwan, our final recommendations are to use the random forest. It performed much better than the other two models, requires no transformations, and is relatively intuitive. Furthermore, though not explored in this report, the random forest model can be further tuned to possibly improve the performance even more, and reduce its complexity.
